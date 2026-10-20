@@ -399,6 +399,7 @@ class Manager:
                 status, summary = "demo_done", "시뮬레이션 완료. 실제 코드·AI·DB 테스트는 실행하지 않았습니다."
             else:
                 status, summary = self.real_run(run, task, project, deadline, result)
+            self.check(deadline)
         except Cancelled as e:
             status, summary = "cancelled", str(e)
         except (Problem, Halt, OSError, subprocess.SubprocessError) as e:
@@ -406,13 +407,19 @@ class Manager:
         except Exception as e:
             status, summary = "failed", f"{type(e).__name__}: {e}"
         finally:
-            result["summary"] = summary
-            self.store.execute("UPDATE runs SET status=?,stage=?,summary=?,result=?,updated=? WHERE id=?",
-                               (status, status, summary, json.dumps(result, ensure_ascii=False), now(), run))
-            self.store.execute("UPDATE tasks SET status=?,updated=? WHERE id=?", (status, now(), task["id"]))
-            self.store.event(run, status, summary)
             with self.lock:
-                self.active = None
+                if self.stop_flag.is_set():
+                    status, summary = "cancelled", "사용자 요청으로 중단했습니다."
+                result["summary"] = summary
+                try:
+                    with self.store.connect() as c:
+                        c.execute("UPDATE runs SET status=?,stage=?,summary=?,result=?,updated=? WHERE id=?",
+                                  (status, status, summary, json.dumps(result, ensure_ascii=False), now(), run))
+                        c.execute("UPDATE tasks SET status=?,updated=? WHERE id=?", (status, now(), task["id"]))
+                        c.execute("INSERT INTO events(run_id,kind,message,created) VALUES(?,?,?,?)",
+                                  (run, status, summary[:12000], now()))
+                finally:
+                    self.active = None
 
     def real_run(self, run, task, project, deadline, result):
         config = project["config"]
@@ -432,6 +439,7 @@ class Manager:
         feedback = ""
         for attempt in range(config["retries"] + 1):
             self.check(deadline)
+            result.update(checks=[], review=None, changed_files=[], attempt=attempt + 1)
             self.store.execute("UPDATE runs SET attempt=? WHERE id=?", (attempt + 1, run))
             self.stage(run, "worker", f"수정 담당 실행 ({attempt + 1}/{config['retries'] + 1})")
             prompt = (

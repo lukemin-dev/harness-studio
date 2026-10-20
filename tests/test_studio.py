@@ -28,8 +28,14 @@ class ScriptedManager(Manager):
                 (root / "calculator.py").write_text("def add(a,b): return 0\n")
             output = Path(argv[argv.index("-o") + 1])
             output.write_text(json.dumps({"passed": True, "summary": "Reviewed", "findings": []}))
+            if self.behavior == "stale_review":
+                output.write_text(json.dumps({"passed": False, "summary": "Needs correction", "findings": ["Improve documentation"]}))
+            if self.behavior == "late_cancel":
+                self.stop_flag.set()
         else:
             self.calls += 1
+            if self.behavior == "stale_review" and self.calls == 2:
+                return 1
             target = root / ("forbidden.py" if self.behavior == "scope" else "calculator.py")
             value = "0" if self.behavior == "fail" or self.behavior == "retry" and self.calls == 1 else "a + b"
             target.write_text(f'def add(a, b):\n    """Add two values."""\n    return {value}\n')
@@ -85,6 +91,18 @@ class StudioTests(unittest.TestCase):
         run = self.run_task()
         self.assertEqual(run["status"], "verified", run["summary"])
         self.assertEqual(run["attempt"], 2)
+
+    def test_retry_does_not_report_previous_attempt_evidence(self):
+        self.manager.behavior = "stale_review"
+        run = self.run_task()
+        self.assertEqual(run["status"], "blocked")
+        self.assertEqual(run["result"]["checks"], [])
+        self.assertIsNone(run["result"]["review"])
+
+    def test_cancellation_at_review_completion_is_honored(self):
+        self.manager.behavior = "late_cancel"
+        run = self.run_task()
+        self.assertEqual(run["status"], "cancelled")
 
     def test_reviewer_cannot_change_candidate(self):
         self.manager.behavior = "review_mutation"
