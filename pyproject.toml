@@ -1,0 +1,19 @@
+[project]
+name = "harness-studio"
+version = "0.1.0"
+description = "Local Codex task orchestration with isolated Git workspaces and independent review"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+harness-studio = "harness.app:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.package-data]
+harness = ["static/*"]
+
+[tool.setuptools.packages.find]
+include = ["harness*"]
