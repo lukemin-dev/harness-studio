@@ -173,13 +173,19 @@ class StudioTests(unittest.TestCase):
                 self.assertEqual(error.exception.code, 403)
             payload = json.dumps({"project_id": self.sample["project"]["id"], "title": "HTTP",
                                   "prompt": "Document add", "acceptance": "Tests pass"}).encode()
+            invalid = urllib.request.Request(base + "/api/tasks", data=payload,
+                                             headers={"X-CSRF-Token": state["csrf"]})
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                urllib.request.urlopen(invalid)
+            self.assertEqual(error.exception.code, 400)
             req = urllib.request.Request(base + "/api/tasks", data=payload,
-                                         headers={"X-CSRF-Token": state["csrf"]})
+                                         headers={"X-CSRF-Token": state["csrf"], "Content-Type": "application/json"})
             with urllib.request.urlopen(req) as response:
                 self.assertEqual(json.load(response)["title"], "HTTP")
             with urllib.request.urlopen(base + "/") as response:
                 self.assertIn(b"Harness Studio", response.read())
                 self.assertIn("frame-ancestors 'none'", response.headers["Content-Security-Policy"])
+                self.assertEqual(response.headers["X-Frame-Options"], "DENY")
         finally:
             server.shutdown()
             server.server_close()

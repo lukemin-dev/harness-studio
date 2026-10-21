@@ -131,44 +131,62 @@ def git(path, *args):
 
 
 def validate_config(data):
-    path = Path(str(data.get("path", ""))).expanduser().resolve()
+    if not isinstance(data.get("path"), str) or not data["path"].strip():
+        raise Problem("저장소 경로를 입력해 주세요.")
+    path = Path(data["path"].strip()).expanduser().resolve()
     if not path.is_dir():
         raise Problem("실제 Git 저장소 폴더를 입력해 주세요.")
     top = Path(git(path, "rev-parse", "--show-toplevel")).resolve()
     if top != path:
         raise Problem(f"저장소 최상위 폴더를 지정해 주세요: {top}")
     git(path, "rev-parse", "HEAD")
-    name = str(data.get("name", "")).strip()
+    if not isinstance(data.get("name"), str):
+        raise Problem("프로젝트 이름은 문자열이어야 합니다.")
+    name = data["name"].strip()
     if not name or len(name) > 100:
         raise Problem("프로젝트 이름은 1~100자로 입력해 주세요.")
     allowed = data.get("allowed", [])
-    if not isinstance(allowed, list) or not allowed or any(
-        not isinstance(x, str) or not x or x.startswith(("/", "\\")) or
-        ".." in x.split("/") or "\\" in x or ":" in x for x in allowed
+    if not isinstance(allowed, list) or not allowed or len(allowed) > 200 or any(
+        not isinstance(x, str) or not x.strip() or len(x) > 1000 or
+        x != x.strip() or any(ord(c) < 32 for c in x) or x.startswith(("/", "\\")) or
+        ".." in x.split("/") or "\\" in x or ":" in x or
+        any(part in {".git", ".harness"} for part in x.split("/")) for x in allowed
     ):
         raise Problem("수정 허용 파일을 저장소 기준 상대 경로 패턴으로 입력해 주세요.")
     commands = data.get("commands", [])
     if not isinstance(commands, list) or len(commands) > 12:
         raise Problem("검사 명령은 최대 12개입니다.")
     for cmd in commands:
-        if not isinstance(cmd, list) or not cmd or any(not isinstance(x, str) or not x for x in cmd):
+        if not isinstance(cmd, list) or not cmd or len(cmd) > 128 or any(
+            not isinstance(x, str) or not x or "\0" in x or len(x) > 16000 for x in cmd
+        ):
             raise Problem('검사 명령은 [["python", "-m", "unittest"]] 형태입니다.')
     try:
-        retries, timeout = int(data.get("retries", 1)), int(data.get("timeout", 900))
+        values = [data.get("retries", 1), data.get("timeout", 900)]
+        if any(type(v) not in (int, str) or (isinstance(v, str) and not v.isdecimal()) for v in values):
+            raise ValueError()
+        retries, timeout = map(int, values)
     except (TypeError, ValueError):
         raise Problem("재시도·제한시간은 정수로 입력해 주세요.")
     if not 0 <= retries <= 3 or not 10 <= timeout <= 7200:
         raise Problem("재시도는 0~3회, 전체 제한시간은 10~7200초입니다.")
-    model = str(data.get("model", "")).strip()
+    if not isinstance(data.get("model", ""), str):
+        raise Problem("모델 이름은 문자열이어야 합니다.")
+    model = data.get("model", "").strip()
     if len(model) > 100 or any(c.isspace() for c in model):
         raise Problem("모델 이름은 공백 없이 100자 이하로 입력해 주세요.")
+    rules = data.get("rules", "")
+    if not isinstance(rules, str) or len(rules) > 12000 or "\0" in rules:
+        raise Problem("프로젝트 규칙은 12000자 이하의 문자열이어야 합니다.")
     return name, str(path), {
-        "allowed": allowed, "commands": commands, "retries": retries, "timeout": timeout,
-        "rules": str(data.get("rules", ""))[:12000], "model": model,
+        "allowed": list(dict.fromkeys(allowed)), "commands": commands, "retries": retries, "timeout": timeout,
+        "rules": rules, "model": model,
     }
 
 
 def allowed_path(path, patterns):
+    if any(part in {".git", ".harness"} for part in path.split("/")):
+        return False
     return any(fnmatch.fnmatchcase(path, p) for p in patterns)
 
 
@@ -212,8 +230,10 @@ def parse_review(path):
         result = json.loads(Path(path).read_text(encoding="utf-8-sig"))
     except (OSError, ValueError) as e:
         raise Halt("검수 결과 JSON을 읽을 수 없습니다.") from e
-    if (not isinstance(result, dict) or type(result.get("passed")) is not bool or
+    if (not isinstance(result, dict) or set(result) != {"passed", "summary", "findings"} or
+        type(result.get("passed")) is not bool or
         not isinstance(result.get("summary"), str) or
+        not result.get("summary", "").strip() or
         not isinstance(result.get("findings"), list) or
         any(not isinstance(x, str) for x in result["findings"])):
         raise Halt("검수 결과 형식이 잘못되어 완료 처리하지 않습니다.")
@@ -246,8 +266,10 @@ class Manager:
 
     def task(self, data):
         project = self.store.one("projects", data.get("project_id"))
-        title, prompt = str(data.get("title", "")).strip(), str(data.get("prompt", "")).strip()
-        acceptance = str(data.get("acceptance", "")).strip()
+        if any(not isinstance(data.get(k), str) or "\0" in data[k] for k in ("title", "prompt", "acceptance")):
+            raise Problem("제목·작업 지시·완료 기준은 문자열이어야 합니다.")
+        title, prompt = data["title"].strip(), data["prompt"].strip()
+        acceptance = data["acceptance"].strip()
         if not title or not prompt or not acceptance or len(title) > 200 or len(prompt) > 20000 or len(acceptance) > 12000:
             raise Problem("제목·작업 지시·완료 기준을 입력해 주세요. 입력 길이도 확인해 주세요.")
         key = ident()
@@ -385,7 +407,8 @@ class Manager:
     def _run(self, run, task, project, mode):
         deadline = time.monotonic() + project["config"]["timeout"]
         result = {"checks": [], "review": None, "changed_files": [],
-                  "db_verified": False, "ui_verified": False}
+                  "db_verified": False, "ui_verified": False,
+                  "config_snapshot": project["config"]}
         status, summary = "failed", ""
         try:
             if mode == "demo":

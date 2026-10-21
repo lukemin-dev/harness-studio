@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import secrets
 import shutil
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -59,6 +60,7 @@ def make_handler(manager):
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("X-Frame-Options", "DENY")
             self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
             if download:
                 self.send_header("Content-Disposition", f'attachment; filename="{download}"')
@@ -94,6 +96,8 @@ def make_handler(manager):
                     if len(parts) == 4 and parts[3] == "diff":
                         return self.reply(200, {"diff": manager.diff(key)})
                     after = int(parse_qs(u.query).get("after", ["0"])[0])
+                    if after < 0:
+                        raise Problem("로그 위치는 0 이상이어야 합니다.")
                     return self.reply(200, manager.detail(key, after))
                 names = {"/": "index.html", "/app.js": "app.js", "/style.css": "style.css"}
                 if path not in names:
@@ -113,6 +117,8 @@ def make_handler(manager):
                 size = int(self.headers.get("Content-Length", "0"))
                 if not 0 < size <= 65536:
                     raise Problem("요청 크기가 올바르지 않습니다.")
+                if self.headers.get_content_type() != "application/json":
+                    raise Problem("JSON 형식으로 요청해 주세요.")
                 data = json.loads(self.rfile.read(size))
                 if not isinstance(data, dict):
                     raise Problem("객체 형태의 요청이 필요합니다.")
@@ -141,6 +147,8 @@ def make_handler(manager):
                 else:
                     return self.reply(404, {"error": "지원하지 않는 요청입니다."})
                 self.reply(200, result)
+            except sqlite3.IntegrityError:
+                self.reply(400, {"error": "이미 등록된 저장소입니다. 기존 프로젝트를 확인하세요."})
             except (Problem, ValueError, TypeError) as e:
                 self.reply(400, {"error": str(e)})
             except Exception:
