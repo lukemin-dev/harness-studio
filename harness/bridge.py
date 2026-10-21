@@ -58,6 +58,8 @@ def main(argv=None):
     parser.add_argument("--port", type=int, default=8765)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("status")
+    preflight = sub.add_parser("preflight")
+    preflight.add_argument("project_id")
     register = sub.add_parser("register")
     register.add_argument("file", type=Path, help="UTF-8 JSON 작업 지시 파일")
     args = parser.parse_args(argv)
@@ -65,9 +67,14 @@ def main(argv=None):
         bridge = Bridge(args.port)
         if args.command == "register" and args.file.stat().st_size > 65536:
             raise ValueError("작업 파일은 64KiB 이하로 작성하세요.")
-        result = bridge.status() if args.command == "status" else bridge.register(
-            json.loads(args.file.read_text(encoding="utf-8-sig"))
-        )
+        if args.command == "status":
+            result = bridge.status()
+        elif args.command == "preflight":
+            if not args.project_id.isalnum():
+                raise ValueError("프로젝트 ID가 올바르지 않습니다.")
+            result = bridge.request(f"/api/projects/{args.project_id}/preflight")
+        else:
+            result = bridge.register(json.loads(args.file.read_text(encoding="utf-8-sig")))
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
     except (ValueError, OSError, HTTPError, URLError) as exc:

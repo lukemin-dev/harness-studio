@@ -87,6 +87,8 @@ def make_handler(manager):
                                 system={"codex": bool(manager.codex), "git": bool(shutil.which("git")),
                                         "python": sys.version.split()[0], "version": "0.1.0"})
                     return self.reply(200, data)
+                if path.startswith("/api/projects/") and path.endswith("/preflight"):
+                    return self.reply(200, manager.preflight(path.split("/")[3]))
                 if path.startswith("/api/runs/"):
                     parts = path.strip("/").split("/")
                     key = parts[2]

@@ -19,6 +19,9 @@
 ## 도우미용 로컬 도구
 
 하네스 폴더에서 Python으로 `-m harness.bridge status`를 실행하여 상태를 확인합니다.
+실행 전 확인은 `-m harness.bridge preflight <프로젝트 ID>`입니다.
+저장소 변경 상태·Codex 설치/로그인·검사 실행 파일을 확인하며 검사 명령 자체는 실행하지 않습니다.
+`ready`가 참이어도 모델 이용 가능 여부·사용량·DB 동작은 확정하지 않습니다.
 등록은 `-m harness.bridge register <작업 JSON 파일>`입니다.
 JSON에는 `project_id`, `title`, `prompt`, `acceptance`를 문자열로 지정합니다.
 프로젝트 ID는 상태 조회로 확인하며 추측하지 않습니다.

@@ -277,6 +277,41 @@ class Manager:
                            (key, project["id"], title, prompt, acceptance, "todo", now(), now()))
         return self.store.one("tasks", key)
 
+    def preflight(self, project_id):
+        """Read-only readiness report; never executes user test commands."""
+        project = self.store.one("projects", project_id)
+        checks = []
+        def add(name, status, message):
+            checks.append(dict(name=name, status=status, message=message))
+        try:
+            git(project["path"], "rev-parse", "HEAD")
+            dirty = bool(git(project["path"], "status", "--porcelain"))
+            add("repository", "fail" if dirty else "pass",
+                "미커밋 변경이 있습니다." if dirty else "기준 커밋과 깨끗한 저장소를 확인했습니다.")
+        except (Problem, OSError, subprocess.SubprocessError) as exc:
+            add("repository", "fail", str(exc))
+        executable = shutil.which(self.codex) if self.codex else None
+        add("codex", "pass" if executable else "fail", "Codex CLI 설치 확인" if executable else "Codex CLI를 찾지 못했습니다.")
+        if executable:
+            try:
+                auth = subprocess.run([executable, "login", "status"], capture_output=True,
+                    timeout=15, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                add("login", "pass" if auth.returncode == 0 else "fail",
+                    "로그인 상태 확인" if auth.returncode == 0 else "Codex 로그인이 필요합니다.")
+            except (OSError, subprocess.SubprocessError):
+                add("login", "unknown", "로그인 상태를 확인하지 못했습니다.")
+        for index, command in enumerate(project["config"]["commands"], 1):
+            program = command[0].replace("{python}", sys.executable)
+            candidate = Path(project["path"]) / program
+            found = candidate.is_file() if ("/" in program or "\\" in program) else bool(shutil.which(program))
+            add(f"check_{index}", "pass" if found else "fail",
+                "검사 실행 파일 확인" if found else "검사 실행 파일을 찾지 못했습니다.")
+        if not project["config"]["commands"]:
+            add("tests", "unknown", "검사 명령이 없어 독립 소스 검수만 수행합니다.")
+        add("availability", "unknown", "모델 이용 가능 여부·남은 사용량은 실제 호출 전 확정하지 않습니다.")
+        return {"project_id": project_id, "ready": not any(c["status"] == "fail" for c in checks),
+                "checks": checks, "scope": "실행 전 확인만 수행. AI 수정·검사 명령·DB 작업은 실행하지 않았습니다."}
+
     def start(self, task_id, mode="codex"):
         if mode not in {"codex", "demo"}:
             raise Problem("실행 모드가 올바르지 않습니다.")
